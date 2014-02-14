@@ -9,7 +9,8 @@ from kafka import KafkaClient
 from kafka.common import (
     ProduceRequest, FetchRequest, Message, ChecksumError,
     ConsumerFetchSizeTooSmall, ProduceResponse, FetchResponse,
-    OffsetAndMessage, BrokerMetadata, PartitionMetadata
+    OffsetAndMessage, BrokerMetadata, PartitionMetadata,
+    TopicAndPartition, PartitionUnavailableError
 )
 from kafka.common import KafkaUnavailableError
 from kafka.codec import (
@@ -54,7 +55,6 @@ class TestPackage(unittest.TestCase):
         from kafka import KafkaClient as KafkaClient2
         self.assertEquals(KafkaClient2.__name__, "KafkaClient")
 
-        from kafka.codec import snappy_encode
         self.assertEquals(snappy_encode.__name__, "snappy_encode")
 
 
@@ -91,8 +91,9 @@ class TestProtocol(unittest.TestCase):
         payloads = ["v1", "v2"]
         msg = create_gzip_message(payloads)
         self.assertEqual(msg.magic, 0)
-        self.assertEqual(msg.attributes, KafkaProtocol.ATTRIBUTE_CODEC_MASK &
-                                         KafkaProtocol.CODEC_GZIP)
+        self.assertEqual(
+            msg.attributes,
+            KafkaProtocol.ATTRIBUTE_CODEC_MASK & KafkaProtocol.CODEC_GZIP)
         self.assertEqual(msg.key, None)
         # Need to decode to check since gzipped payload is non-deterministic
         decoded = gzip_decode(msg.value)
@@ -107,8 +108,9 @@ class TestProtocol(unittest.TestCase):
         payloads = ["v1", "v2"]
         msg = create_snappy_message(payloads)
         self.assertEqual(msg.magic, 0)
-        self.assertEqual(msg.attributes, KafkaProtocol.ATTRIBUTE_CODEC_MASK &
-                                         KafkaProtocol.CODEC_SNAPPY)
+        self.assertEqual(
+            msg.attributes,
+            KafkaProtocol.ATTRIBUTE_CODEC_MASK & KafkaProtocol.CODEC_SNAPPY)
         self.assertEqual(msg.key, None)
         expect = ("8\x00\x00\x19\x01@\x10L\x9f[\xc2\x00\x00\xff\xff\xff\xff"
                   "\x00\x00\x00\x02v1\x19\x1bD\x00\x10\xd5\x96\nx\x00\x00\xff"
@@ -279,6 +281,7 @@ class TestProtocol(unittest.TestCase):
                               len(ms3), ms3)
 
         responses = list(KafkaProtocol.decode_fetch_response(encoded))
+
         def expand_messages(response):
             return FetchResponse(response.topic, response.partition,
                                  response.error, response.highwaterMark,
@@ -366,7 +369,6 @@ class TestProtocol(unittest.TestCase):
     def test_decode_offset_response(self):
         pass
 
-
     @unittest.skip("Not Implemented")
     def test_encode_offset_commit_request(self):
         pass
@@ -416,8 +418,10 @@ class TestKafkaClient(unittest.TestCase):
             ('kafka02', 9092): MagicMock()
         }
         # inject conns
-        mocked_conns[('kafka01', 9092)].send.side_effect = RuntimeError("kafka01 went away (unittest)")
-        mocked_conns[('kafka02', 9092)].send.side_effect = RuntimeError("Kafka02 went away (unittest)")
+        mocked_conns[('kafka01', 9092)].send.side_effect = RuntimeError(
+            "kafka01 went away (unittest)")
+        mocked_conns[('kafka02', 9092)].send.side_effect = RuntimeError(
+            "Kafka02 went away (unittest)")
 
         def mock_get_conn(host, port):
             print 'mock_get_conn: %s:%d=%s' % (host, port, mocked_conns[(host, port)])
@@ -427,8 +431,7 @@ class TestKafkaClient(unittest.TestCase):
         with patch.object(KafkaClient, 'load_metadata_for_topics'), \
                 patch.object(KafkaClient, '_get_conn', side_effect=mock_get_conn):
 
-            client = KafkaClient(hosts=['kafka01:9092','kafka02:9092'])
-
+            client = KafkaClient(hosts=['kafka01:9092', 'kafka02:9092'])
 
             self.assertRaises(
                 KafkaUnavailableError,
@@ -449,9 +452,12 @@ class TestKafkaClient(unittest.TestCase):
             ('kafka03', 9092): MagicMock()
         }
         # inject conns
-        mocked_conns[('kafka01', 9092)].send.side_effect = RuntimeError("kafka01 went away (unittest)")
-        mocked_conns[('kafka02', 9092)].recv.return_value = 'valid response'
-        mocked_conns[('kafka03', 9092)].send.side_effect = RuntimeError("kafka03 went away (unittest)")
+        mocked_conns[('kafka01', 9092)].send.side_effect = \
+            RuntimeError("kafka01 went away (unittest)")
+        mocked_conns[('kafka02', 9092)].recv.return_value = \
+            'valid response'
+        mocked_conns[('kafka03', 9092)].send.side_effect = \
+            RuntimeError("kafka03 went away (unittest)")
 
         def mock_get_conn(host, port):
             print 'mock_get_conn: %s:%d=%s' % (host, port, mocked_conns[(host, port)])
@@ -468,10 +474,10 @@ class TestKafkaClient(unittest.TestCase):
             self.assertEqual('valid response', resp)
             mocked_conns[('kafka02', 9092)].recv.assert_called_with(1)
 
-    @unittest.skip('requires disabling recursion on load_metadata_for_topics')
     @patch('kafka.client.KafkaConnection')
     @patch('kafka.client.KafkaProtocol')
-    def test_client_load_metadata(self, protocol, conn):
+    def test_load_metadata(self, protocol, conn):
+        "Load metadata for all topics"
 
         conn.recv.return_value = 'response'  # anything but None
 
@@ -483,25 +489,33 @@ class TestKafkaClient(unittest.TestCase):
         topics['topic_1'] = {
             0: PartitionMetadata('topic_1', 0, 1, [1, 2], [1, 2])
         }
-        topics['topic_2'] = {
-            0: PartitionMetadata('topic_2', 0, 0, [0, 1], [0, 1]),
-            1: PartitionMetadata('topic_2', 1, 1, [1, 0], [1, 0])
+        topics['topic_noleader'] = {
+            0: PartitionMetadata('topic_noleader', 0, -1, [], []),
+            1: PartitionMetadata('topic_noleader', 1, -1, [], [])
+        }
+        topics['topic_no_partitions'] = {}
+        topics['topic_3'] = {
+            0: PartitionMetadata('topic_3', 0, 0, [0, 1], [0, 1]),
+            1: PartitionMetadata('topic_3', 1, 1, [1, 0], [1, 0]),
+            2: PartitionMetadata('topic_3', 2, 0, [0, 1], [0, 1])
         }
         protocol.decode_metadata_response.return_value = (brokers, topics)
 
+        # client loads metadata at init
         client = KafkaClient(hosts='broker_1:4567')
-        self.assertItemsEqual(
-            {
-                TopicAndPartition('topic_1', 0): brokers[0],
-                TopicAndPartition('topic_2', 0): brokers[0],
-                TopicAndPartition('topic_2', 1): brokers[1]
-            },
+        self.assertItemsEqual({
+            TopicAndPartition('topic_1', 0): brokers[0],
+            TopicAndPartition('topic_noleader', 0): None,
+            TopicAndPartition('topic_noleader', 1): None,
+            TopicAndPartition('topic_3', 0): brokers[0],
+            TopicAndPartition('topic_3', 1): brokers[1],
+            TopicAndPartition('topic_3', 2): brokers[0]},
             client.topics_to_brokers)
 
-    @unittest.skip('requires disabling recursion on load_metadata_for_topics')
     @patch('kafka.client.KafkaConnection')
     @patch('kafka.client.KafkaProtocol')
-    def test_client_load_metadata_unassigned_partitions(self, protocol, conn):
+    def test_get_leader_for_partitions_reloads_metadata(self, protocol, conn):
+        "Get leader for partitions reload metadata if it is not available"
 
         conn.recv.return_value = 'response'  # anything but None
 
@@ -509,38 +523,54 @@ class TestKafkaClient(unittest.TestCase):
         brokers[0] = BrokerMetadata(0, 'broker_1', 4567)
         brokers[1] = BrokerMetadata(1, 'broker_2', 5678)
 
-        topics = {}
-        topics['topic_1'] = {
-            0: PartitionMetadata('topic_1', 0, -1, [], [])
+        topics = {'topic_no_partitions': {}}
+        protocol.decode_metadata_response.return_value = (brokers, topics)
+
+        client = KafkaClient(hosts='broker_1:4567')
+
+        # topic metadata is loaded but empty
+        self.assertItemsEqual({}, client.topics_to_brokers)
+
+        topics['topic_no_partitions'] = {
+            0: PartitionMetadata('topic_no_partitions', 0, 0, [0, 1], [0, 1])
         }
+        protocol.decode_metadata_response.return_value = (brokers, topics)
+
+        # calling _get_leader_for_partition (from any broker aware request)
+        # will try loading metadata again for the same topic
+        leader = client._get_leader_for_partition('topic_no_partitions', 0)
+
+        self.assertEqual(brokers[0], leader)
+        self.assertItemsEqual({
+            TopicAndPartition('topic_no_partitions', 0): brokers[0]},
+            client.topics_to_brokers)
+
+    @patch('kafka.client.KafkaConnection')
+    @patch('kafka.client.KafkaProtocol')
+    def test_get_leader_for_unassigned_partitions(self, protocol, conn):
+        "Get leader raises if no partitions is defined for a topic"
+
+        conn.recv.return_value = 'response'  # anything but None
+
+        brokers = {}
+        brokers[0] = BrokerMetadata(0, 'broker_1', 4567)
+        brokers[1] = BrokerMetadata(1, 'broker_2', 5678)
+
+        topics = {'topic_no_partitions': {}}
         protocol.decode_metadata_response.return_value = (brokers, topics)
 
         client = KafkaClient(hosts='broker_1:4567')
 
         self.assertItemsEqual({}, client.topics_to_brokers)
         self.assertRaises(
-            Exception,
+            PartitionUnavailableError,
             client._get_leader_for_partition,
-            'topic_1', 0)
+            'topic_no_partitions', 0)
 
-        # calling _get_leader_for_partition (from any broker aware request)
-        # will try loading metadata again for the same topic
-        topics['topic_1'] = {
-            0: PartitionMetadata('topic_1', 0, 0, [0, 1], [0, 1])
-        }
-        leader = client._get_leader_for_partition('topic_1', 0)
-
-        self.assertEqual(brokers[0], leader)
-        self.assertItemsEqual(
-            {
-                TopicAndPartition('topic_1', 0): brokers[0],
-            },
-            client.topics_to_brokers)
-
-    @unittest.skip('requires disabling recursion on load_metadata_for_topics')
     @patch('kafka.client.KafkaConnection')
     @patch('kafka.client.KafkaProtocol')
-    def test_client_load_metadata_noleader_partitions(self, protocol, conn):
+    def test_get_leader_returns_none_when_noleader(self, protocol, conn):
+        "Getting leader for partitions returns None when the partiion has no leader"
 
         conn.recv.return_value = 'response'  # anything but None
 
@@ -549,42 +579,57 @@ class TestKafkaClient(unittest.TestCase):
         brokers[1] = BrokerMetadata(1, 'broker_2', 5678)
 
         topics = {}
-        topics['topic_1'] = {
-            0: PartitionMetadata('topic_1', 0, -1, [], [])
-        }
-        topics['topic_2'] = {
-            0: PartitionMetadata('topic_2', 0, 0, [0, 1], []),
-            1: PartitionMetadata('topic_2', 1, 1, [1, 0], [1, 0])
+        topics['topic_noleader'] = {
+            0: PartitionMetadata('topic_noleader', 0, -1, [], []),
+            1: PartitionMetadata('topic_noleader', 1, -1, [], [])
         }
         protocol.decode_metadata_response.return_value = (brokers, topics)
 
         client = KafkaClient(hosts='broker_1:4567')
         self.assertItemsEqual(
             {
-                TopicAndPartition('topic_2', 0): brokers[0],
-                TopicAndPartition('topic_2', 1): brokers[1]
+                TopicAndPartition('topic_noleader', 0): None,
+                TopicAndPartition('topic_noleader', 1): None
             },
             client.topics_to_brokers)
-        self.assertRaises(
-            Exception,
-            client._get_leader_for_partition,
-            'topic_1', 0)
+        self.assertIsNone(client._get_leader_for_partition('topic_noleader', 0))
+        self.assertIsNone(client._get_leader_for_partition('topic_noleader', 1))
 
-        # calling _get_leader_for_partition (from any broker aware request)
-        # will try loading metadata again for the same topic
-        topics['topic_1'] = {
-            0: PartitionMetadata('topic_1', 0, 0, [0, 1], [0, 1])
+        topics['topic_noleader'] = {
+            0: PartitionMetadata('topic_noleader', 0, 0, [0, 1], [0, 1]),
+            1: PartitionMetadata('topic_noleader', 1, 1, [1, 0], [1, 0])
         }
-        leader = client._get_leader_for_partition('topic_1', 0)
+        protocol.decode_metadata_response.return_value = (brokers, topics)
+        self.assertEqual(brokers[0], client._get_leader_for_partition('topic_noleader', 0))
+        self.assertEqual(brokers[1], client._get_leader_for_partition('topic_noleader', 1))
 
-        self.assertEqual(brokers[0], leader)
-        self.assertItemsEqual(
-            {
-                TopicAndPartition('topic_1', 0): brokers[0],
-                TopicAndPartition('topic_2', 0): brokers[0],
-                TopicAndPartition('topic_2', 1): brokers[1]
-            },
-            client.topics_to_brokers)
+    @patch('kafka.client.KafkaConnection')
+    @patch('kafka.client.KafkaProtocol')
+    def test_send_produce_request_raises_when_noleader(self, protocol, conn):
+        "Getting leader for partitions returns None when the partiion has no leader"
+
+        conn.recv.return_value = 'response'  # anything but None
+
+        brokers = {}
+        brokers[0] = BrokerMetadata(0, 'broker_1', 4567)
+        brokers[1] = BrokerMetadata(1, 'broker_2', 5678)
+
+        topics = {}
+        topics['topic_noleader'] = {
+            0: PartitionMetadata('topic_noleader', 0, -1, [], []),
+            1: PartitionMetadata('topic_noleader', 1, -1, [], [])
+        }
+        protocol.decode_metadata_response.return_value = (brokers, topics)
+
+        client = KafkaClient(hosts='broker_1:4567')
+
+        requests = [ProduceRequest(
+            "topic_noleader", 0,
+            [create_message("a"), create_message("b")])]
+
+        self.assertRaises(
+            PartitionUnavailableError,
+            client.send_produce_request, requests)
 
 if __name__ == '__main__':
     unittest.main()
