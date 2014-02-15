@@ -3,7 +3,8 @@ import random
 import struct
 import unittest
 
-from mock import patch
+from mock import MagicMock, patch
+
 
 from kafka import KafkaClient
 from kafka.common import (
@@ -55,6 +56,7 @@ class TestPackage(unittest.TestCase):
         from kafka import KafkaClient as KafkaClient2
         self.assertEquals(KafkaClient2.__name__, "KafkaClient")
 
+        from kafka.codec import snappy_encode
         self.assertEquals(snappy_encode.__name__, "snappy_encode")
 
 
@@ -411,20 +413,17 @@ class TestKafkaClient(unittest.TestCase):
     def test_send_broker_unaware_request_fail(self):
         'Tests that call fails when all hosts are unavailable'
 
-        from mock import MagicMock
-
         mocked_conns = {
             ('kafka01', 9092): MagicMock(),
             ('kafka02', 9092): MagicMock()
         }
-        # inject conns
+        # inject KafkaConnection side effects
         mocked_conns[('kafka01', 9092)].send.side_effect = RuntimeError(
             "kafka01 went away (unittest)")
         mocked_conns[('kafka02', 9092)].send.side_effect = RuntimeError(
             "Kafka02 went away (unittest)")
 
         def mock_get_conn(host, port):
-            print 'mock_get_conn: %s:%d=%s' % (host, port, mocked_conns[(host, port)])
             return mocked_conns[(host, port)]
 
         # patch to avoid making requests before we want it
@@ -442,16 +441,14 @@ class TestKafkaClient(unittest.TestCase):
                 conn.send.assert_called_with(1, 'fake request')
 
     def test_send_broker_unaware_request(self):
-        'Tests that call fails when one of the host is available'
-
-        from mock import MagicMock
+        'Tests that call works when at least one of the host is available'
 
         mocked_conns = {
             ('kafka01', 9092): MagicMock(),
             ('kafka02', 9092): MagicMock(),
             ('kafka03', 9092): MagicMock()
         }
-        # inject conns
+        # inject KafkaConnection side effects
         mocked_conns[('kafka01', 9092)].send.side_effect = \
             RuntimeError("kafka01 went away (unittest)")
         mocked_conns[('kafka02', 9092)].recv.return_value = \
@@ -460,7 +457,6 @@ class TestKafkaClient(unittest.TestCase):
             RuntimeError("kafka03 went away (unittest)")
 
         def mock_get_conn(host, port):
-            print 'mock_get_conn: %s:%d=%s' % (host, port, mocked_conns[(host, port)])
             return mocked_conns[(host, port)]
 
         # patch to avoid making requests before we want it
