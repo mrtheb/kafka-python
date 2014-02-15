@@ -11,9 +11,8 @@ from kafka.common import (
     ProduceRequest, FetchRequest, Message, ChecksumError,
     ConsumerFetchSizeTooSmall, ProduceResponse, FetchResponse,
     OffsetAndMessage, BrokerMetadata, PartitionMetadata,
-    TopicAndPartition, PartitionUnavailableError
+    TopicAndPartition, LeaderUnavailableError, PartitionUnavailableError
 )
-from kafka.common import KafkaUnavailableError
 from kafka.codec import (
     has_gzip, has_snappy, gzip_encode, gzip_decode,
     snappy_encode, snappy_decode
@@ -56,7 +55,6 @@ class TestPackage(unittest.TestCase):
         from kafka import KafkaClient as KafkaClient2
         self.assertEquals(KafkaClient2.__name__, "KafkaClient")
 
-        from kafka.codec import snappy_encode
         self.assertEquals(snappy_encode.__name__, "snappy_encode")
 
 
@@ -522,7 +520,7 @@ class TestKafkaClient(unittest.TestCase):
         topics = {'topic_no_partitions': {}}
         protocol.decode_metadata_response.return_value = (brokers, topics)
 
-        client = KafkaClient(hosts='broker_1:4567')
+        client = KafkaClient(host='broker_1', port=4567)
 
         # topic metadata is loaded but empty
         self.assertItemsEqual({}, client.topics_to_brokers)
@@ -581,7 +579,7 @@ class TestKafkaClient(unittest.TestCase):
         }
         protocol.decode_metadata_response.return_value = (brokers, topics)
 
-        client = KafkaClient(hosts='broker_1:4567')
+        client = KafkaClient(host='broker_1', port=4567)
         self.assertItemsEqual(
             {
                 TopicAndPartition('topic_noleader', 0): None,
@@ -624,7 +622,7 @@ class TestKafkaClient(unittest.TestCase):
             [create_message("a"), create_message("b")])]
 
         self.assertRaises(
-            PartitionUnavailableError,
+            LeaderUnavailableError,
             client.send_produce_request, requests)
 
 if __name__ == '__main__':
