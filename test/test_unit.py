@@ -10,8 +10,8 @@ from kafka import KafkaClient
 from kafka.common import (
     ProduceRequest, FetchRequest, Message, ChecksumError,
     ConsumerFetchSizeTooSmall, ProduceResponse, FetchResponse,
-    OffsetAndMessage, BrokerMetadata, PartitionMetadata,
-    TopicAndPartition, LeaderUnavailableError, PartitionUnavailableError
+    OffsetAndMessage, BrokerMetadata, PartitionMetadata, TopicAndPartition,
+    KafkaUnavailableError, LeaderUnavailableError, PartitionUnavailableError
 )
 from kafka.codec import (
     has_gzip, has_snappy, gzip_encode, gzip_decode,
@@ -520,7 +520,7 @@ class TestKafkaClient(unittest.TestCase):
         topics = {'topic_no_partitions': {}}
         protocol.decode_metadata_response.return_value = (brokers, topics)
 
-        client = KafkaClient(host='broker_1', port=4567)
+        client = KafkaClient(hosts='broker_1:4567')
 
         # topic metadata is loaded but empty
         self.assertItemsEqual({}, client.topics_to_brokers)
@@ -579,7 +579,7 @@ class TestKafkaClient(unittest.TestCase):
         }
         protocol.decode_metadata_response.return_value = (brokers, topics)
 
-        client = KafkaClient(host='broker_1', port=4567)
+        client = KafkaClient(hosts='broker_1:4567')
         self.assertItemsEqual(
             {
                 TopicAndPartition('topic_noleader', 0): None,
